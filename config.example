@@ -2,6 +2,6 @@
 TOOLPATH: /opt/grafana-mail
 CRONPATH: /etc/cron.d/grafana-mail
 USER: root
-HOST: http://localhost:3000/grafana
+HOST: http://localhost:3000
 DATABASE: sqlite.db
 FROM_EMAIL: grafana@local
