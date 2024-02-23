@@ -1,3 +1,13 @@
 libjson-perl
 libterm-progressbar-perl
 libdbd-sqlite3-perl
+libnss3
+libatk1.0-0
+libatk-bridge2.0-0
+libdrm-dev
+libxcomposite-dev
+libxdamage1
+libxrandr2
+libgbm-dev
+libxkbcommon-x11-0
+libasound2
