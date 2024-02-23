@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-use warnings;
+#use warnings;
 use strict;
 use JSON qw( decode_json );
 use Term::ProgressBar;
@@ -490,9 +490,8 @@ sub sendReport {
                     my $progress_bar = Term::ProgressBar->new($#panels+1);
                     my $progress = 1;
 					foreach(@panels) {
-				                  system(`/usr/bin/curl -b $toolpath/data/cookie-$index -k --silent -o $toolpath/data/$d[1][$i]-$_-$index.png -H "Authorization: Bearer $apiKey" "$host/render/d-solo/$d[0][$i]/$d[1][$i]?orgId=1&panelId=$_&from=now-${epoch}h&to=now-1m&timeout=30&height=430"`);
-
-                              $progress_bar->update($progress++);
+				        system(`/usr/bin/curl -b $toolpath/data/cookie-$index -k --silent -o $toolpath/data/$d[1][$i]-$_-$index.png -H "Authorization: Bearer $apiKey" "$host/render/d-solo/$d[0][$i]/$d[1][$i]?orgId=1&panelId=$_&from=now-${epoch}h&to=now-1m&timeout=30&height=430"`);
+                        $progress_bar->update($progress++);
 					}
 					print "Sende Dashboad $d[1][$i] an $emails\n";
 
@@ -526,13 +525,13 @@ sub sendReport {
                print MAIL "\n </body>\n</html>\n\n";
 
                # Convert pngs to PDF and attach
-               my $pdf = "$d[1][$i]-$index.pdf";
-               system(`/usr/bin/convert $toolpath/data/$d[1][$i]-*-$index.png $toolpath/data/$pdf`);
-               print MAIL "--$boundary\n";
-               print MAIL "Content-Type: application/pdf;name=\"$pdf\"\n";
-               print MAIL "Content-Transfer-Encoding: uuencode\n";
-               print MAIL "Content-Disposition: attachment; filename=$d[1][$i].pdf\n";
-               print MAIL `uuencode $toolpath/data/$pdf $pdf`;
+#               my $pdf = "$d[1][$i]-$index.pdf";
+#               system(`/usr/bin/convert $toolpath/data/$d[1][$i]-*-$index.png $toolpath/data/$pdf`);
+#               print MAIL "--$boundary\n";
+#               print MAIL "Content-Type: application/pdf;name=\"$pdf\"\n";
+#               print MAIL "Content-Transfer-Encoding: uuencode\n";
+#               print MAIL "Content-Disposition: attachment; filename=$d[1][$i].pdf\n";
+#               print MAIL `uuencode $toolpath/data/$pdf $pdf`;
 
                foreach(@panels) {
                   my $bild = "$toolpath/data/$d[1][$i]-$_-$index.png";
