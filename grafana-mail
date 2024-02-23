@@ -1,0 +1,741 @@
+#!/usr/bin/perl
+use warnings;
+use strict;
+use JSON qw( decode_json );
+use Term::ProgressBar;
+use DBI;
+#use DBD::mysql;
+
+my $script = $0;
+$script =~ /(.*?)grafana-mail$/;
+my $toolpath = $1;
+#my $toolpath = "/opt/grafana-mail"; 
+my $cronpath;
+my $user;
+my $host;
+my $database;
+my $mysqlHost;
+my $mysqlUser;
+my $mysqlPassword;
+my $apiKey = `/bin/cat $toolpath/apikey`;
+chomp($apiKey);
+my $fromEmail; 
+
+my @config = `/bin/cat $toolpath/config`;
+foreach(@config) {
+	if ($_ =~ /^#/) {
+		next;
+	}
+	if ($_ =~ /^TOOLPATH: (.+)/) {
+		$toolpath = $1;
+	}
+	elsif ($_ =~ /^CRONPATH: (.+)/) {
+		$cronpath = $1;
+	}
+	elsif ($_ =~ /^USER: (.+)/) {
+		$user = $1;
+	}
+	elsif ($_ =~ /^HOST: (.+)/) {
+		$host = $1;
+	}
+	elsif ($_ =~ /^DATABASE: (.+)/) {
+        	$database = $1;
+	}
+	elsif ($_ =~ /^MYSQLHOST: (.+)/) {
+        	$mysqlHost = $1;
+	}
+	elsif ($_ =~ /^MYSQLUSER: (.+)/) {
+        	$mysqlUser = $1;
+   	}
+	elsif ($_ =~ /^MYSQLPASSWORD: (.+)/) {
+		$mysqlPassword = $1;
+	}
+	elsif ($_ =~ /^FROM_EMAIL: (.+)/) {
+		$fromEmail = $1;
+	}
+	else {
+		die "Konfig Datei Fehlerhaft oder nicht vorhanden.\n";
+	}
+}
+
+my $dbargs = {AutoCommit => 0, PrintError => 1};
+my $dbh = DBI->connect("dbi:SQLite:dbname=$toolpath/sqlite.db", "", "", $dbargs);
+$dbh->do("CREATE TABLE IF NOT EXISTS reports (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(20), description VARCHAR(50), dashboard VARCHAR(20), emails TEXT, day VARCHAR(20), time VARCHAR(20), epoch VARCHAR(20), state VARCHAR(20))");
+
+my $dashboardAPI = `/usr/bin/curl -k --silent -H "Authorization: Bearer $apiKey" "$host/api/search/?query\=\&"`;
+
+#### Verzeichnisse anlegen
+my @verzeichnisse = ("data");
+foreach(@verzeichnisse) {
+	unless(-d "$toolpath/$_") {
+		print "Verzeichnis \"$_\" angelegt!\n";
+		system("mkdir $toolpath/$_");
+	}
+}
+
+
+#### Übergabeparameter
+if($ARGV[0] eq "-h" || $ARGV[0] eq "--help" || $ARGV[0] eq "") {
+	print "\nUsage: grafana-mail [option]\n";
+	print "-l	show reports\n";
+	print "-n	create new report\n";
+	print "-d	delete report\n";
+	print "-e	edit report\n";
+	print "\n";
+}
+
+if($ARGV[0] eq "-l") {
+    &printReports();
+}
+
+if($ARGV[0] eq "-n") {
+	&createReport();
+}
+
+if($ARGV[0] eq "-s") {
+	&sendReport($ARGV[1]);
+}
+if($ARGV[0] eq "-d") {
+	&deleteReport();
+}
+if($ARGV[0] eq "-e") {
+	&editReport();
+}
+
+
+$dbh->disconnect();
+
+
+
+sub printReports {
+    my $inserts = $dbh->prepare("SELECT * FROM reports");
+    $inserts->execute() or die "SQL Error: $DBI::errstr\n";
+
+    while (my @row = $inserts->fetchrow_array) {
+        print "@row\n";
+    }
+}
+
+sub createReport {
+	print "Neuen Report anlegen....\n";
+	
+	my $name = &crequest("Name");
+	my $description = &crequest("Description");
+	my $dashboardId = &crequest("Dashboard");
+	my $mail = &crequest("Mail");
+	my $days = &crequest("Days");
+	my $time = &crequest("Time");
+	my $epoch = &crequest("Epoch");
+
+	print "Soll der Report angelegt werden? [y]/n\n: ";
+	&crequest("YesNo");
+
+    $dbh->do("INSERT INTO reports (name, description, dashboard, emails, day, time, epoch, state) VALUES ('$name', '$description', '$dashboardId', '$mail', '$days', '$time', '$epoch', 'enabled')");
+    if ($dbh->err()) { die "$DBI::errstr\n"; }
+	$dbh->commit();
+
+	&setCron();
+}
+
+sub deleteReport {
+	print "Reports:\n";
+    &printReports();
+
+	print "Welcher Report soll gelöschen werden? - Nummer angeben\n: ";
+	my $id = <STDIN>;
+	chomp($id);
+	print "Report '$id' wirklich löschen? [y]/n\n: ";
+	&crequest("YesNo");
+    $dbh->do("DELETE FROM reports where id = $id");
+
+    &setCron();
+}
+
+sub editReport {
+    print "Report bearbeiten!\nEingaben leer lassen für keine Änderung\n";
+    my $index = &crequest("Reports", "edit");
+    my $mails = &crequest("Mail", "edit");
+    if($mails ne "") {
+       $dbh->do("UPDATE reports SET emails = '$mails' WHERE (id = $index)");
+    }
+
+    my $days = &crequest("Days", "edit");
+    if($days ne "") {
+       $dbh->do("UPDATE reports SET day = '$days' WHERE (id = $index)");
+    }
+
+    my $time = &crequest("Time", "edit");
+    if($time ne "") {
+       $dbh->do("UPDATE reports SET time = '$time' WHERE (id = $index)");
+    }
+
+    my $epoch = &crequest("Epoch", "edit");
+    if($epoch ne "") {
+       $dbh->do("UPDATE reports SET epoch = '$epoch' WHERE (id = $index)");
+    }
+
+    my $active = &crequest("Active", "edit");
+    if($active ne "") {
+       $dbh->do("UPDATE reports SET state = '$active' WHERE (id = $index)");
+    }
+
+    &setCron();
+}
+
+# Konsolen Eingabe
+sub crequest {
+	if($_[0] eq "Name") {
+		Name:
+		print "Name eingeben\n: ";
+		my $name = <STDIN>;
+		chomp $name;
+		unless($name =~ /^[a-zA-Z0-9\-_]+$/) {
+			print "ERROR! Falsches Format. Keine Sonderzeichen!\n\n";
+			goto Name;
+		}
+		return $name;
+	}
+	if($_[0] eq "Description") {
+		Description:
+		print "Beschreibung max. 50 Zeichen (optional)\n: ";
+		my $description = <STDIN>;
+		chomp $description;
+		if($description eq "") {
+			$description = " ";
+		}
+		unless($description =~ /^[a-zA-Z0-9\-_\s\.\@\?!]{1,50}$/) {
+        	        print "ERROR! Falsches Format. Keine Sonderzeichen!\n\n";
+			goto Description;
+		}
+		return $description;
+	}
+   if($_[0] eq "Active") {
+      Active:
+      print "Soll der Report aktiv sein? [y]/n\n: ";
+      my $active = <STDIN>;
+      chomp($active);
+      if($active eq "y" || $active eq "yes" || $active eq "") {
+         $active = "enabled";
+      }
+      else {
+         $active = "disabled";
+      }
+      return $active;
+   }
+	if($_[0] eq "Dashboard") {
+		Dashboard:
+		print "Dashboard auswählen (ID oder Name angeben)  ";
+		my @d = &getDashboards();
+      for(my $i = 0; $i < @{$d[0]}; $i++) {
+      	print "$d[0][$i]:$d[1][$i]   ";
+      }
+      #my $count1 = 0;
+      #my $count2 = 0;
+      #foreach my $a (@d) {
+      #   $count1++;
+      #   foreach my $b (@{$a}) {
+      #      $count2++;
+      #      print "$b\n";
+      #   }
+      #}
+      #print "count1:$count1 - count2:$count2\n";
+      #my $l = @{$d[0]};
+      #print "Länge:$l\n";
+      print "\n: ";
+		my $dashboardId = <STDIN>;
+		chomp $dashboardId;
+		for(my $i = 0; $i < @{$d[0]}; $i++) {
+			if($dashboardId eq $d[0][$i] || $dashboardId eq $d[1][$i]) {
+				$dashboardId = $d[0][$i];
+				return $dashboardId;
+			}
+		}
+		print "Dashboard nicht gefunden!\n\n";
+		goto Dashboard;
+	}
+	if($_[0] eq "Mail") {
+		Mail:
+		print "Email Adressen (mehrere mit Leerzeichen trennen)\n: ";
+		my $mail = <STDIN>;
+		chomp $mail;
+      if($mail eq "" && $_[1] eq "edit") {
+         return "";
+      }
+		my @mailt = split(/ /, $mail);
+		foreach(@mailt) {
+			unless($_ =~ /^[\w\.\-_]+@[\w\.\-_]+$/) {
+				print "Keine Richtige E-Mail Adresse!\n\n";
+				goto Mail;
+			}
+		}
+		return $mail;
+	}
+	if($_[0] eq "Days") {
+      Days:
+      print "Wochentage für die Ausführung. Leer lassen wenn jeden Tag. Mehrere Tage mit Komma trennen\nMontag:1 Dienstag:2 Mittwoch:3 Donnerstag:4 Freitag:5 Samstag:6 Sonntag:7\n: ";
+      my $days = <STDIN>;
+      chomp $days;
+      unless($days eq "") {
+         unless($days =~ /^(\d,)*\d$/) {
+            print "Keine gültige Eingabe!\n\n";
+            goto Days;
+         }
+      }
+	else {
+		$days = " ";
+	}
+      return $days;
+   }
+	if($_[0] eq "Time") {
+		Time:
+		print "Startzeit(en) HH:MM (mehrere mit Leerzeichen trennen)";
+      unless($_[1] eq "edit") {
+         print " [07:00]";
+      }
+      print "\n: ";
+		my $time = <STDIN>;
+		chomp $time;
+		my @startTimes;
+		if($time eq "") {
+         if($_[1] eq "edit") {
+            return "";
+         }
+			$time = "07:00";
+			push(@startTimes, $time);
+		}
+		else {
+			@startTimes = split(/ /, $time);
+			foreach (@startTimes) {
+				if ($_ =~ /^(\d{1,2}):(\d{1,2})$/) {
+					if ($1 > 23 && $2 > 59) {
+						print "Falsche Eingabe!\n\n";
+						goto Time;
+					}
+				}
+			}
+		}
+		return $time;
+	}
+
+   if($_[0] eq "Epoch") {
+      Epoch:
+      print "Graph Zeitraum festlegen. Eingabe in Stunden. Default: 24\n: ";
+      my $epoch = <STDIN>;
+      chomp $epoch;
+      if($epoch eq "") {
+         if($_[1] eq "edit") {
+            return "";
+         }
+         $epoch = "24";
+      }
+      else {
+         unless($epoch =~ /^\d+$/) {
+            print "Keine gültige Eingabe!\n\n";
+            goto Epoch;
+         }
+      }
+      return $epoch;
+   }
+
+   if($_[0] eq "Reports") {
+      Reports:
+      &printReports();
+
+      print "Bitte Nummer des Reports angeben\n: ";
+      my $input = <STDIN>;
+      chomp $input;
+      $input =~ /^(\d+)/;
+      my $index = $1;
+      if ($index eq "") {
+        goto Reports;
+      }
+#      foreach(@file) {
+#         if($_ =~ /^(\d+)/ && $1 == $index) {
+#            goto foundReport;
+#         }
+#      }   
+#      print "Report nicht gefunden!\n";
+#      goto Reports;
+      
+      foundReport:
+      return $index;
+   }
+	if($_[0] eq "YesNo") {
+		my $input = <STDIN>;
+		chomp $input;
+		unless($input eq "" || $input eq "y") {
+			die "Abbruch!\n";
+		}
+		return $input;
+	}
+}
+
+sub getDashboardName {
+	my $id = $_[0];
+	my @d = &getDashboards();
+	for(my $i = 0; $i < $#d; $i++) {
+		if($id eq $d[0][$i]) {
+			return $d[1][$i];
+		}
+	}
+}
+
+sub setCron {
+	open(FILE2, "> $cronpath");
+    my $inserts = $dbh->prepare("SELECT id, time, day, state FROM reports");
+    $inserts->execute() or die "SQL Error: $DBI::errstr\n";
+
+    while (my @row = $inserts->fetchrow_array) {
+        my $id = $row[0];
+        my $time = $row[1];
+        my $days = $row[2];
+        my $state = $row[3];
+    
+        if($state eq "disabled") {
+            next;
+        }
+
+  		my @cron;
+  		my $hour = 0;
+        my $minute = 0;
+  		my $hourDiff = 0;
+  		my $minuteDiff = 0;
+  		my @start = split(/ /, $time);
+  		foreach(@start) {
+    			my $element1 = $_;
+     			foreach(@start) {
+    				my $element2 = $_;
+   				my @s1 = split(/:/, $element1);
+   				my @s2 = split(/:/, $element2);
+   				$hour = $s1[0];
+   				$minute = $s1[1];
+	
+   				if($s1[0] != $s2[0]) {
+	   				$hourDiff = 1;
+			   	}
+		   		if($s1[1] != $s2[1]) {
+                  $minuteDiff = 1;
+               }
+				   if($hourDiff ==  1 && $minuteDiff ==  1) {
+					goto Both;
+				}
+			}
+		}
+		
+		if($hourDiff == 1) {
+			$cron[0] .= "$minute ";
+		}
+
+		Both:
+		foreach(@start) {
+			my @time = split(/:/, $_);
+		
+			if($hourDiff == 1 && $minuteDiff == 1) {
+				push(@cron, "$time[1] $time[0] * * ");
+				next;
+			}
+
+			if($hourDiff == 1) {
+				$cron[0] .= "$time[0],";
+			}
+			if($minuteDiff == 1) {
+				$cron[0] .= "$time[1],";
+			}
+		
+		}
+
+		if($hourDiff == 1 && $minuteDiff == 1) {
+			goto Write;
+		}
+	
+		if($hourDiff == 1 xor $minuteDiff == 1) {
+			chop($cron[0]);
+		}
+		if($minuteDiff == 1) {
+			$cron[0] .= " $hour";
+		}
+		if($hourDiff == 1 xor $minuteDiff == 1) {
+			$cron[0] .= " * * ";
+			goto Write;
+		}
+	
+		$cron[0] = "$minute $hour * * ";
+
+		Write:
+      if($days eq " ") {
+         $cron[0] .= "* ";
+      }
+      else {
+         $cron[0] .= $days;
+      }
+
+		foreach(@cron) {
+			print FILE2 "$_ $user /usr/bin/perl $toolpath/grafana-mail -s $id > /dev/null 2>&1\n";
+		}
+	}
+	print FILE2 "\n";
+	close(FILE);
+}
+
+sub sendReport {
+	my $index = $_[0];
+	unless($index =~ /\d+/) {
+		die "Bitte Index Nummer angeben!\n";
+	}
+    my $inserts = $dbh->prepare("SELECT id, dashboard, emails, epoch FROM reports");
+    $inserts->execute() or die "SQL Error: $DBI::errstr\n";
+
+    while (my @row = $inserts->fetchrow_array) {
+        my $id = $row[0];
+        my $dashboardId = $row[1];
+        my $emails = $row[2];
+        my $epoch = $row[3];
+
+		if($id == $index) {
+			my @d = &getDashboards();
+			for(my $i = 0; $i < @{$d[0]}; $i++) {
+				if($d[0][$i] eq $dashboardId) {
+					print "Speicher Dashboard: $d[1][$i]\n";
+
+     				my @panels = &getPanels($d[0][$i], $index);
+     				#my @panels = &getPanelImages($index, $d[0][$i], $d[1][$i], $epoch);
+                    my $progress_bar = Term::ProgressBar->new($#panels+1);
+                    my $progress = 1;
+					foreach(@panels) {
+				                  system(`/usr/bin/curl -b $toolpath/data/cookie-$index -k --silent -o $toolpath/data/$d[1][$i]-$_-$index.png -H "Authorization: Bearer $apiKey" "$host/render/d-solo/$d[0][$i]/$d[1][$i]?orgId=1&panelId=$_&from=now-${epoch}h&to=now-1m&timeout=30&height=430"`);
+
+                              $progress_bar->update($progress++);
+					}
+					print "Sende Dashboad $d[1][$i] an $emails\n";
+
+
+               #HTML Code
+               my $boundary = `echo \$(date | md5sum | head -c8)`;
+               my $imgid = `echo \$(date | md5sum | head -c10 | rev)`;
+               chomp $boundary;
+               chomp $imgid;
+               open(MAIL, ">$toolpath/data/mail-$index");
+               print MAIL "From: $fromEmail\n";
+               print MAIL "To: $emails\n";
+               print MAIL "Subject: Dashboard - $d[1][$i]\n";
+               print MAIL "MIME-Version:1.0\n";
+               print MAIL "Content-Type:multipart/related; boundary=\"$boundary\"; type=\"multipart/alternative\"\n";
+               print MAIL "Content-Transfer-Encoding: 8bit\n";
+               print MAIL "\nThis is a MIME-encapsulated message\n";
+
+               print MAIL "\n--$boundary\n";
+               print MAIL "Content-Type: text/html; charset=\"us-ascii\"\n";
+               print MAIL "Content-Transfer-Encoding: quoted-printable\n";
+               print MAIL "\n<html>\n <body>\n";
+               
+               #&nbsp
+               for(my $c=0; $c <= $#panels; $c++) {
+                  print MAIL "     <img contenttype=3D\"image/png\" src=3D\"cid:$panels[$c]\" width=\"500\" height=\"350\">\n";
+                  if($c % 2) {
+                     print MAIL "     <br>\n";
+                  }
+               }
+               print MAIL "\n </body>\n</html>\n\n";
+
+               # Convert pngs to PDF and attach
+               my $pdf = "$d[1][$i]-$index.pdf";
+               system(`/usr/bin/convert $toolpath/data/$d[1][$i]-*-$index.png $toolpath/data/$pdf`);
+               print MAIL "--$boundary\n";
+               print MAIL "Content-Type: application/pdf;name=\"$pdf\"\n";
+               print MAIL "Content-Transfer-Encoding: uuencode\n";
+               print MAIL "Content-Disposition: attachment; filename=$d[1][$i].pdf\n";
+               print MAIL `uuencode $toolpath/data/$pdf $pdf`;
+
+               foreach(@panels) {
+                  my $bild = "$toolpath/data/$d[1][$i]-$_-$index.png";
+                  print MAIL "--$boundary\n";
+                  print MAIL "Content-Type: image/png;name=\"$bild\"\n";
+                  print MAIL "Content-Disposition: attachment;filename=\"$bild\"\n";
+                  print MAIL "Content-ID: <$_>\n";
+                  print MAIL "Content-Transfer-Encoding: base64 \n\n";
+                  print MAIL `base64 $bild`;
+                  print MAIL "\n";
+                  #system(`rm -f $toolpath/data/$d[1][$i]-$_-$index.png`);
+               }
+               #print MAIL "\n--$boundary--\n\n\n\n";
+               
+
+               close(MAIL);
+
+               #system(`/usr/sbin/sendmail -i -t <$toolpath/data/mail-$index --attachment $toolpath/data/$d[1][$i]-$index.pdf`);
+               system(`/usr/sbin/sendmail -i -t <$toolpath/data/mail-$index`);
+               system(`rm -f $toolpath/data/mail-$index`);
+               system(`rm -f $toolpath/data/$d[1][$i]-*-$index.png`);
+               system(`rm -f $toolpath/data/$d[1][$i]-$index.pdf`);
+            }
+	  }
+	  last;
+	 }
+	}
+	close(FILE);
+}
+
+sub getDashboards {
+	my @dashboard;
+	my @title;
+	my @id;
+	my @api = split(/\},\{/, $dashboardAPI);
+	foreach(@api) {
+		if($_ =~ /"title":"(.+?)"/) {
+         		my $t = $1;
+		        $t =~ s/ +/\-/g;
+		        $t =~ s/\-+/-/g;
+			$t =~ s/\.+/-/g;
+			push(@title, $t);
+		}
+		if($_ =~ /"uid":"(.+?)"/) {
+		        push(@id, $1);
+		}
+	}
+	@dashboard = (\@id, \@title);
+	return @dashboard;
+}
+
+sub getPanels {
+   my $dashboard = $_[0];
+   my $index = $_[1];
+   my $json = `/usr/bin/curl -D $toolpath/data/cookie-$index -k --silent -H "Authorization: Bearer $apiKey" "$host/api/dashboards/uid/$dashboard"`;
+   #open(FILE, "> $toolpath/data/json");
+   #print FILE $json;
+   #close(FILE);
+   #print "$json";
+   #$json =~ /"panels":\[\{(.*?(\{.*?\})+?)\}/;
+   #print "$1\n";
+   
+   my $test = '{
+      "id": 2,
+      "rows": [
+         {
+            "panels": [
+               {
+                  "id": 5,
+                  "title": "Test"
+               },
+               {
+                  "id": 6,
+                  "title": "Bla"
+               }
+             ]
+         },
+         {
+            "panels": [
+               {
+                  "id": 17,
+                  "title": "kk"
+               }
+            ]
+         }
+       ]
+   }';
+#   my @ids;
+#   my $decoded = decode_json( $json );
+#   my @rows = @{$decoded->{'dashboard'}};
+#   foreach my $row (@rows) {
+#      my @panels = @{$row->{'panels'}};
+#      foreach my $panel (@panels) {
+#         push(@ids, $panel->{"id"});
+#      }
+#   }
+#   print "IDs: @ids\n";
+#   return @ids;
+
+   my @ids;
+   my $decoded = decode_json( $json );
+   my $id = $decoded->{"dashboard"}{"id"};
+   print "ID: $id\n";
+
+   my @panels = @{$decoded->{"dashboard"}{"panels"}};
+   foreach my $panel (@panels) {
+      if ($panel->{"type"} ne "row") {
+         push(@ids, $panel->{"id"});
+      }
+      if ($panel->{"type"} eq "row" && $panel->{"collapsed"} eq "1") {
+         my @collapsedPanels = @{$panel->{"panels"}};
+         foreach my $cpanel (@collapsedPanels) {
+            push(@ids, $cpanel->{"id"});
+         }
+      }
+   }
+   print "Panel IDs: @ids\n";
+   return @ids;
+}
+
+sub getPanelImages {
+    my $index = $_[0];
+    my $dashboard = $_[1];
+    my $dashboardName = $_[2];
+    my $epoch = $_[3];
+    my $json = `/usr/bin/curl -c $toolpath/data/cookie-$index -k --silent -H "Authorization: Bearer $apiKey" "$host/api/dashboards/uid/$dashboard"`;
+    #print "$json";
+    #$json =~ /"panels":\[\{(.*?(\{.*?\})+?)\}/;
+    #print "$1\n";
+
+    my $test = '{
+      "id": 2,
+      "rows": [
+         {
+            "panels": [
+               {
+                  "id": 5,
+                  "title": "Test"
+               },
+               {
+                  "id": 6,
+                  "title": "Bla"
+               }
+             ]
+         },
+         {
+            "panels": [
+               {
+                  "id": 17,
+                  "title": "kk"
+               }
+            ]
+         }
+       ]
+   }';
+#   my @ids;
+#   my $decoded = decode_json( $json );
+#   my @rows = @{$decoded->{'dashboard'}};
+#   foreach my $row (@rows) {
+#      my @panels = @{$row->{'panels'}};
+#      foreach my $panel (@panels) {
+#         push(@ids, $panel->{"id"});
+#      }
+#   }
+#   print "IDs: @ids\n";
+#   return @ids;
+
+
+    my @ids;
+    my $decoded = decode_json( $json );
+    my $id = $decoded->{"dashboard"}{"id"};
+    print "ID: $id\n";
+
+    my @panels = @{$decoded->{"dashboard"}{"panels"}};
+    foreach my $panel (@panels) {
+        my $panelid;
+        if ($panel->{"type"} eq "graph") {
+            $panelid = $panel->{"id"};
+        }
+        if ($panel->{"type"} eq "row" && $panel->{"collapsed"} eq "true") {
+            my @collapsedPanels = @{$panel->{"panels"}};
+            foreach my $cpanel (@collapsedPanels) {
+                $panelid = $cpanel->{"id"};
+            }
+        }
+
+        if ($panelid ne "") {
+            system(`/usr/bin/curl -k --silent -o $toolpath/data/$dashboardName-$panelid-$index.png -H "Authorization: Bearer $apiKey" "$host/render/d-solo/$dashboard/$dashboardName?orgId=1&panelId=$panelid&from=now-${epoch}h&to=now-1m&timeout=30&height=430"`);
+            push(@ids, $panelid);
+        }
+    }
+    print "Panel IDs: @ids\n";
+    return @ids;
+}

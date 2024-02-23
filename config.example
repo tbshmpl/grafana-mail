@@ -1,0 +1,9 @@
+### Tool Pfad
+TOOLPATH: /opt/grafana-mail
+CRONPATH: /etc/cron.d/grafana-mail
+USER: root
+HOST: http://localhost:3000/grafana
+DATABASE: grafana_mail
+MYSQLHOST: localhost
+MYSQLUSER: grafana_mail
+MYSQLPASSWORD: grafana123
