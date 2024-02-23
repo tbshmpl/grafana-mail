@@ -14,9 +14,6 @@ my $cronpath;
 my $user;
 my $host;
 my $database;
-my $mysqlHost;
-my $mysqlUser;
-my $mysqlPassword;
 my $apiKey = `/bin/cat $toolpath/apikey`;
 chomp($apiKey);
 my $fromEmail; 
@@ -41,15 +38,6 @@ foreach(@config) {
 	elsif ($_ =~ /^DATABASE: (.+)/) {
         	$database = $1;
 	}
-	elsif ($_ =~ /^MYSQLHOST: (.+)/) {
-        	$mysqlHost = $1;
-	}
-	elsif ($_ =~ /^MYSQLUSER: (.+)/) {
-        	$mysqlUser = $1;
-   	}
-	elsif ($_ =~ /^MYSQLPASSWORD: (.+)/) {
-		$mysqlPassword = $1;
-	}
 	elsif ($_ =~ /^FROM_EMAIL: (.+)/) {
 		$fromEmail = $1;
 	}
@@ -59,7 +47,7 @@ foreach(@config) {
 }
 
 my $dbargs = {AutoCommit => 0, PrintError => 1};
-my $dbh = DBI->connect("dbi:SQLite:dbname=$toolpath/sqlite.db", "", "", $dbargs);
+my $dbh = DBI->connect("dbi:SQLite:dbname=$toolpath/$database", "", "", $dbargs);
 $dbh->do("CREATE TABLE IF NOT EXISTS reports (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(20), description VARCHAR(50), dashboard VARCHAR(20), emails TEXT, day VARCHAR(20), time VARCHAR(20), epoch VARCHAR(20), state VARCHAR(20))");
 
 my $dashboardAPI = `/usr/bin/curl -k --silent -H "Authorization: Bearer $apiKey" "$host/api/search/?query\=\&"`;
