@@ -135,6 +135,8 @@ sub deleteReport {
 	print "Report '$id' wirklich löschen? [y]/n\n: ";
 	&crequest("YesNo");
     $dbh->do("DELETE FROM reports where ROWID = $id");
+    if ($dbh->err()) { die "$DBI::errstr\n"; }
+    $dbh->commit();
 
     &setCron();
 }
@@ -166,6 +168,9 @@ sub editReport {
     if($active ne "") {
        $dbh->do("UPDATE reports SET state = '$active' WHERE (ROWID = $index)");
     }
+
+    if ($dbh->err()) { die "$DBI::errstr\n"; }
+    $dbh->commit();
 
     &setCron();
 }
