@@ -3,6 +3,8 @@ First steps:<br>
 copy config.example to config<br>
 fill config file<br>
 generate a service account token in grafana and store it in a file named apikey<br>
+<br>
+[Grafana Imange Renderer](https://grafana.com/grafana/plugins/grafana-image-renderer/) plugin is needed:<br>
 
 ```
 Usage: grafana-mail [option]
