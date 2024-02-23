@@ -1,7 +1,7 @@
 # grafana-mail
-First steps:
-copy config.example to config
-fill config file
+First steps:<br>
+copy config.example to config<br>
+fill config file<br>
 
 ```
 Usage: grafana-mail [option]
