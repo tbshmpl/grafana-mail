@@ -48,7 +48,7 @@ foreach(@config) {
 
 my $dbargs = {AutoCommit => 0, PrintError => 1};
 my $dbh = DBI->connect("dbi:SQLite:dbname=$toolpath/$database", "", "", $dbargs);
-$dbh->do("CREATE TABLE IF NOT EXISTS reports (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(20), description VARCHAR(50), dashboard VARCHAR(20), emails TEXT, day VARCHAR(20), time VARCHAR(20), epoch VARCHAR(20), state VARCHAR(20))");
+$dbh->do("CREATE TABLE IF NOT EXISTS reports (name VARCHAR(20), description VARCHAR(50), dashboard VARCHAR(20), emails TEXT, day VARCHAR(20), time VARCHAR(20), epoch VARCHAR(20), state VARCHAR(20))");
 
 my $dashboardAPI = `/usr/bin/curl -k --silent -H "Authorization: Bearer $apiKey" "$host/api/search/?query\=\&"`;
 
@@ -96,7 +96,7 @@ $dbh->disconnect();
 
 
 sub printReports {
-    my $inserts = $dbh->prepare("SELECT * FROM reports");
+    my $inserts = $dbh->prepare("SELECT ROWID, * FROM reports");
     $inserts->execute() or die "SQL Error: $DBI::errstr\n";
 
     while (my @row = $inserts->fetchrow_array) {
@@ -134,7 +134,7 @@ sub deleteReport {
 	chomp($id);
 	print "Report '$id' wirklich löschen? [y]/n\n: ";
 	&crequest("YesNo");
-    $dbh->do("DELETE FROM reports where id = $id");
+    $dbh->do("DELETE FROM reports where ROWID = $id");
 
     &setCron();
 }
@@ -144,27 +144,27 @@ sub editReport {
     my $index = &crequest("Reports", "edit");
     my $mails = &crequest("Mail", "edit");
     if($mails ne "") {
-       $dbh->do("UPDATE reports SET emails = '$mails' WHERE (id = $index)");
+       $dbh->do("UPDATE reports SET emails = '$mails' WHERE (ROWID = $index)");
     }
 
     my $days = &crequest("Days", "edit");
     if($days ne "") {
-       $dbh->do("UPDATE reports SET day = '$days' WHERE (id = $index)");
+       $dbh->do("UPDATE reports SET day = '$days' WHERE (ROWID = $index)");
     }
 
     my $time = &crequest("Time", "edit");
     if($time ne "") {
-       $dbh->do("UPDATE reports SET time = '$time' WHERE (id = $index)");
+       $dbh->do("UPDATE reports SET time = '$time' WHERE (ROWID = $index)");
     }
 
     my $epoch = &crequest("Epoch", "edit");
     if($epoch ne "") {
-       $dbh->do("UPDATE reports SET epoch = '$epoch' WHERE (id = $index)");
+       $dbh->do("UPDATE reports SET epoch = '$epoch' WHERE (ROWID = $index)");
     }
 
     my $active = &crequest("Active", "edit");
     if($active ne "") {
-       $dbh->do("UPDATE reports SET state = '$active' WHERE (id = $index)");
+       $dbh->do("UPDATE reports SET state = '$active' WHERE (ROWID = $index)");
     }
 
     &setCron();
@@ -370,7 +370,7 @@ sub getDashboardName {
 
 sub setCron {
 	open(FILE2, "> $cronpath");
-    my $inserts = $dbh->prepare("SELECT id, time, day, state FROM reports");
+    my $inserts = $dbh->prepare("SELECT ROWID, time, day, state FROM reports");
     $inserts->execute() or die "SQL Error: $DBI::errstr\n";
 
     while (my @row = $inserts->fetchrow_array) {
@@ -470,7 +470,7 @@ sub sendReport {
 	unless($index =~ /\d+/) {
 		die "Bitte Index Nummer angeben!\n";
 	}
-    my $inserts = $dbh->prepare("SELECT id, dashboard, emails, epoch FROM reports");
+    my $inserts = $dbh->prepare("SELECT ROWID, dashboard, emails, epoch FROM reports");
     $inserts->execute() or die "SQL Error: $DBI::errstr\n";
 
     while (my @row = $inserts->fetchrow_array) {
